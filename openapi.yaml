@@ -1,0 +1,358 @@
+openapi: 3.1.0
+info:
+  title: SMSBarato API
+  version: 1.0.0
+  description: |
+    API oficial da SMSBarato para envio de SMS transacionais e promocionais, consulta de status, saldo e autenticação 2FA via SMS ou WhatsApp.
+
+    **Casos de uso comuns:**
+    - Notificações transacionais (pedidos, entregas)
+    - Carrinho abandonado
+    - Login e recuperação de senha
+    - Autenticação de dois fatores WhatsApp ou SMS (2FA / OTP)
+    - Alertas e marketing direto
+
+    Todos os números devem estar no formato internacional brasileiro: `55` + DDD + número (ex: 5511999999999).
+    
+    **Autenticação:** Todas as chamadas requerem `Authorization: Bearer <seu-token>`.
+
+    **IMPORTANTE - SEGURANÇA DO TOKEN**
+    O Bearer Token é secreto e nunca deve ser exposto no frontend do cliente final.
+    Todas as integrações devem passar por um backend próprio do integrador para proteger o token.
+    Qualquer exposição do token pode resultar em perda financeira.
+
+  contact:
+    name: Suporte SMSBarato
+    email: contato@smsbarato.com.br
+    url: https://www.smsbarato.com.br/
+  license:
+    name: Proprietário - Uso apenas com token autorizado
+
+servers:
+  - url: https://sistema81.smsbarato.com.br
+    description: Ambiente de Produção
+
+tags:
+  - name: SMS
+    description: Operações de envio e consulta de SMS
+  - name: 2FA
+    description: Autenticação de dois fatores e OTP via SMS e WhatsApp
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Token de autenticação fornecido pela SMSBarato
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Numero inválido"
+      required: [error]
+
+    SendSMSRequest:
+      type: object
+      required: [dest, text]
+      properties:
+        dest:
+          type: string
+          description: Número no formato 55 + DDD + número (apenas dígitos)
+          example: "5511999999999"
+          pattern: '^55[0-9]{10,11}$'
+        text:
+          type: string
+          maxLength: 160
+          description: Mensagem a ser enviada. Sem emojis. Use apenas letras, números, pontuação básica 
+          example: "Não abandone seu carrinho! Use o cupom 10OFF e finalize sua compra agora."
+
+    SendSMSResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        id:
+          type: string
+          description: ID da mensagem para consulta posterior de status
+          example: "1928271"
+
+    StatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "SendingOK"
+          enum: [NEW, SendingOK, SendingError]
+        sendingdatetime:
+          type: string
+          format: date-time
+          example: "2026-04-27 23:21:33"
+
+    SaldoResponse:
+      type: object
+      properties:
+        saldo:
+          type: integer
+          example: 5000
+
+    TwoFASendRequest:
+      type: object
+      required: [dest, empresa, template]
+      properties:
+        dest:
+          type: string
+          description: Número no formato 55 + DDD + número (apenas dígitos)
+          example: "5511999999999"
+          pattern: '^55[0-9]{10,11}$'
+        empresa:
+          type: string
+          maxLength: 20
+          example: "SMSBarato"
+        template:
+          type: string
+          enum:
+            - sms_codigo_simples
+            - sms_login_empresa
+            - sms_cadastro
+            - whatsapp_2fa
+            - whatsapp_otp
+          description: Template pré-aprovado para envio de código
+
+    TwoFASendResponse:
+      type: object
+      properties:
+        sent:
+          type: boolean
+          example: true
+
+    TwoFAVerifyRequest:
+      type: object
+      required: [dest, codigo]
+      properties:
+        dest:
+          type: string
+          description: Número no formato 55 + DDD + número (apenas dígitos)
+          example: "5511999999999"
+          pattern: '^55[0-9]{10,11}$'          
+        codigo:
+          type: string
+          maxLength: 20
+          example: "A1B2C3"
+
+    TwoFAVerifyResponse:
+      type: object
+      properties:
+        verified:
+          type: boolean
+          example: true
+
+  responses:
+    BadRequest:
+      description: Requisição inválida
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+            example:
+              error: "Numero invalido"
+
+    Unauthorized:
+      description: Token inválido ou ausente
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+            example:
+              error: "Chave invalida"
+
+security:
+  - BearerAuth: []
+
+paths:
+  /send:
+    post:
+      tags: [SMS]
+      summary: Enviar SMS transacional ou promocional
+      description: |
+        Envia um SMS para um número brasileiro. 
+        Ideal para notificações, carrinho abandonado, confirmações de pedido, alertas e marketing.
+        Taxa de entrega média superior a 95% no Brasil.
+      operationId: sendSMS
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendSMSRequest'
+            examples:
+              carrinho_abandonado:
+                summary: Carrinho abandonado
+                value:
+                  dest: "5511999999999"
+                  text: "Não abandone seu carrinho! Use o cupom 10OFF e finalize sua compra agora."
+              confirmacao_pedido:
+                summary: Confirmação de pedido
+                value:
+                  dest: "5511988888888"
+                  text: "Seu pedido #12345 foi confirmado. Entrega prevista para 15/06."
+      responses:
+        '200':
+          description: SMS enviado com sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendSMSResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          description: "Saldo insuficiente para envio"
+
+  /status:
+    get:
+      tags: [SMS]
+      summary: Consultar status de uma mensagem
+      description: Retorna o status atual da mensagem enviada (enviando, entregue, falha, etc.)
+      operationId: getStatus
+      parameters:
+        - in: query
+          name: id
+          required: true
+          schema:
+            type: string
+          description: ID da mensagem retornado no endpoint /send
+          example: "198280"
+      responses:
+        '200':
+          description: Status da mensagem
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /saldo:
+    get:
+      tags: [SMS]
+      summary: Consultar saldo de créditos
+      description: Retorna a quantidade de créditos SMS disponíveis na sua conta.
+      operationId: getSaldo
+      responses:
+        '200':
+          description: Saldo atual
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaldoResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /replies:
+    get:
+      tags: [SMS]
+      summary: Buscar respostas recebidas (SMS e WhatsApp)
+      description: |
+        Retorna mensagens recebidas dos clientes via SMS ou WhatsApp no período informado.
+        Útil para suporte, respostas de campanhas e automações bidirecionais.
+      operationId: getReplies
+      parameters:
+        - in: query
+          name: from_date
+          required: false
+          schema:
+            type: string
+            format: date
+          example: "2026-05-20"
+        - in: query
+          name: to_date
+          required: false
+          schema:
+            type: string
+            format: date
+          example: "2026-05-31"
+      responses:
+        '200':
+          description: Respostas encontradas
+          content:
+            application/json:
+              example:
+                success: true
+                message: "From 2026-05-20 to 2026-05-31"
+                whatsapp: []
+                sms: []
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /2fasend:
+    post:
+      tags: [2FA]
+      summary: Enviar código 2FA / OTP
+      description: Envia um código de verificação usando template pré-aprovado via SMS ou WhatsApp.
+      operationId: send2FA
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TwoFASendRequest'
+            examples:
+              login:
+                value:
+                  dest: "5511999999999"
+                  empresa: "MinhaLoja"
+                  template: "sms_login_empresa"
+      responses:
+        '200':
+          description: Código enviado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TwoFASendResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          description: "Saldo insuficiente para envio"
+
+  /2faverify:
+    post:
+      tags: [2FA]
+      summary: Validar código 2FA
+      description: Verifica se o código informado pelo usuário está correto.
+      operationId: verify2FA
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TwoFAVerifyRequest'
+      responses:
+        '200':
+          description: Resultado da validação
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TwoFAVerifyResponse'
+        '403':
+          description: "Não autorizado"
+          content:
+            application/json:
+              example:
+                verified: false                  
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
